@@ -17,10 +17,8 @@ package dynamic_mounting
 import (
 	"fmt"
 	"log"
-	"math/rand"
 	"path"
 	"testing"
-	"time"
 
 	"cloud.google.com/go/compute/metadata"
 	"github.com/googlecloudplatform/gcsfuse/tools/integration_tests/util/mounting"
@@ -28,10 +26,8 @@ import (
 )
 
 const PrefixBucketForDynamicMountingTest = "gcsfuse-dynamic-mounting-test-"
-const Charset = "abcdefghijklmnopqrstuvwxyz0123456789"
 
-var seededRand *rand.Rand = rand.New(rand.NewSource(time.Now().UnixNano()))
-var testBucketForDynamicMounting = PrefixBucketForDynamicMountingTest + generateRandomString(5)
+var testBucketForDynamicMounting = PrefixBucketForDynamicMountingTest + setup.GenerateRandomString(5)
 
 func mountGcsfuseWithDynamicMounting(flags []string) (err error) {
 	defaultArg := []string{"--debug_gcs",
@@ -79,25 +75,23 @@ func executeTestsForDynamicMounting(flags [][]string, m *testing.M) (successCode
 	// mntDir - bucket1, bucket2, bucket3, ...
 	// We will test on passed testBucket and one created bucket.
 
+	// SetDynamicBucketMounted to the passed test bucket.
+	setup.SetDynamicBucketMounted(setup.TestBucket())
 	// Test on testBucket
 	successCode = runTestsOnGivenMountedTestBucket(setup.TestBucket(), flags, rootMntDir, m)
 
 	// Test on created bucket.
+	// SetDynamicBucketMounted to the mounted bucket.
+	setup.SetDynamicBucketMounted(testBucketForDynamicMounting)
 	if successCode == 0 {
 		successCode = runTestsOnGivenMountedTestBucket(testBucketForDynamicMounting, flags, rootMntDir, m)
 	}
+	// Reset SetDynamicBucketMounted to empty after tests are done.
+	setup.SetDynamicBucketMounted("")
 
 	// Setting back the original mntDir after testing.
 	setup.SetMntDir(rootMntDir)
 	return
-}
-
-func generateRandomString(length int) string {
-	b := make([]byte, length)
-	for i := range b {
-		b[i] = Charset[seededRand.Intn(len(Charset))]
-	}
-	return string(b)
 }
 
 func RunTests(flags [][]string, m *testing.M) (successCode int) {

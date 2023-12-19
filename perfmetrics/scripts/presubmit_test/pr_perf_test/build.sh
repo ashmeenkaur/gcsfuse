@@ -34,8 +34,8 @@ set -e
 sudo apt-get update
 echo Installing git
 sudo apt-get install git
-echo Installing go-lang  1.21.0
-wget -O go_tar.tar.gz https://go.dev/dl/go1.21.0.linux-amd64.tar.gz -q
+echo Installing go-lang  1.21.4
+wget -O go_tar.tar.gz https://go.dev/dl/go1.21.4.linux-amd64.tar.gz -q
 sudo rm -rf /usr/local/go && tar -xzf go_tar.tar.gz && sudo mv go /usr/local
 export PATH=$PATH:/usr/local/go/bin
 export CGO_ENABLED=0
@@ -53,15 +53,31 @@ function execute_perf_test() {
   # The VM will itself exit if the gcsfuse mount fails.
   go run . $GCSFUSE_FLAGS $BUCKET_NAME $MOUNT_POINT
   # Running FIO test
-  chmod +x perfmetrics/scripts/presubmit/run_load_test_on_presubmit.sh
   ./perfmetrics/scripts/presubmit/run_load_test_on_presubmit.sh
   sudo umount gcs
+}
+
+function install_requirements() {
+  # Installing requirements
+  echo installing requirements
+  echo Installing python3-pip
+  sudo apt-get -y install python3-pip
+  echo Installing Bigquery module requirements...
+  pip install --require-hashes -r ./perfmetrics/scripts/bigquery/requirements.txt --user
+  echo Installing libraries to run python script
+  pip install google-cloud
+  pip install google-cloud-vision
+  pip install google-api-python-client
+  pip install prettytable
+  "${KOKORO_ARTIFACTS_DIR}/github/gcsfuse/perfmetrics/scripts/fio/install_fio.sh" "${KOKORO_ARTIFACTS_DIR}/github"
+  cd "${KOKORO_ARTIFACTS_DIR}/github/gcsfuse"
 }
 
 # execute perf tests.
 if [[ "$perfTestStr" == *"$EXECUTE_PERF_TEST_LABEL"* ]];
 then
  # Executing perf tests for master branch
+ install_requirements
  git checkout master
  # Store results
  touch result.txt
@@ -87,7 +103,6 @@ then
   git checkout pr/$KOKORO_GITHUB_PULL_REQUEST_NUMBER
 
   echo "Running e2e tests...."
-  chmod +x perfmetrics/scripts/run_e2e_tests.sh
   # $1 argument is refering to value of testInstalledPackage.
   ./perfmetrics/scripts/run_e2e_tests.sh $RUN_E2E_TESTS_ON_INSTALLED_PACKAGE
 fi

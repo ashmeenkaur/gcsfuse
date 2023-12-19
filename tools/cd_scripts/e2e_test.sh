@@ -71,6 +71,12 @@ then
     #install git
     sudo apt install -y git
 
+   # install python3-setuptools tools.
+   sudo apt-get install -y gcc python3-dev python3-setuptools
+   # Downloading composite object requires integrity checking with CRC32c in gsutil.
+   # it requires to install crcmod.
+   sudo apt install -y python3-crcmod
+
     #install build-essentials
     sudo apt install -y build-essential
 else
@@ -105,7 +111,7 @@ else
 fi
 
 # install go
-wget -O go_tar.tar.gz https://go.dev/dl/go1.21.0.linux-${architecture}.tar.gz
+wget -O go_tar.tar.gz https://go.dev/dl/go1.21.4.linux-${architecture}.tar.gz
 sudo tar -C /usr/local -xzf go_tar.tar.gz
 export PATH=${PATH}:/usr/local/go/bin
 #Write gcsfuse and go version to log file
@@ -116,6 +122,19 @@ go version |& tee -a ~/logs.txt
 export PATH=${PATH}:/usr/local/go/bin
 git clone https://github.com/googlecloudplatform/gcsfuse |& tee -a ~/logs.txt
 cd gcsfuse
+
+# Installation of crcmod is working through pip only on rhel and centos.
+# For debian and ubuntu, we are installing through sudo apt.
+if grep -q rhel details.txt || grep -q centos details.txt;
+then
+    # install python3-setuptools tools and python3-pip
+    sudo yum -y install gcc python3-devel python3-setuptools redhat-rpm-config
+    sudo yum -y install python3-pip
+    # Downloading composite object requires integrity checking with CRC32c in gsutil.
+    # it requires to install crcmod.
+    pip3 install --require-hashes -r tools/cd_scripts/requirements.txt --user
+fi
+
 git checkout $(sed -n 2p ~/details.txt) |& tee -a ~/logs.txt
 
 #run tests with testbucket flag

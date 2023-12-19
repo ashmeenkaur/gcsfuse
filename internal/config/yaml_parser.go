@@ -15,7 +15,9 @@
 package config
 
 import (
+	"bytes"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 
@@ -31,6 +33,8 @@ const (
 	WARNING LogSeverity = "WARNING"
 	ERROR   LogSeverity = "ERROR"
 	OFF     LogSeverity = "OFF"
+
+	parseConfigFileErrMsgFormat = "error parsing config file: %v"
 )
 
 func IsValidLogSeverity(severity LogSeverity) bool {
@@ -47,6 +51,16 @@ func IsValidLogSeverity(severity LogSeverity) bool {
 	return false
 }
 
+func IsValidLogRotateConfig(config LogRotateConfig) error {
+	if config.MaxFileSizeMB <= 0 {
+		return fmt.Errorf("max-file-size-mb should be atleast 1")
+	}
+	if config.BackupFileCount < 0 {
+		return fmt.Errorf("backup-file-count should be 0 (to retain all backup files) or a positive value")
+	}
+	return nil
+}
+
 func ParseConfigFile(fileName string) (mountConfig *MountConfig, err error) {
 	mountConfig = NewMountConfig()
 
@@ -60,15 +74,27 @@ func ParseConfigFile(fileName string) (mountConfig *MountConfig, err error) {
 		return
 	}
 
-	err = yaml.Unmarshal(buf, mountConfig)
-	if err != nil {
-		err = fmt.Errorf("error parsing config file: %w", err)
-		return
+	// Ensure error is thrown when unexpected configs are passed in config file.
+	// Ref: https://github.com/go-yaml/yaml/issues/602#issuecomment-623485602
+	decoder := yaml.NewDecoder(bytes.NewReader(buf))
+	decoder.KnownFields(true)
+	if err = decoder.Decode(mountConfig); err != nil {
+		// Decode returns EOF in case of empty config file.
+		if err == io.EOF {
+			return mountConfig, nil
+		}
+		return mountConfig, fmt.Errorf(parseConfigFileErrMsgFormat, err)
 	}
+
 	// convert log severity to upper-case
 	mountConfig.LogConfig.Severity = LogSeverity(strings.ToUpper(string(mountConfig.LogConfig.Severity)))
 	if !IsValidLogSeverity(mountConfig.LogConfig.Severity) {
 		err = fmt.Errorf("error parsing config file: log severity should be one of [trace, debug, info, warning, error, off]")
+		return
+	}
+
+	if err = IsValidLogRotateConfig(mountConfig.LogConfig.LogRotateConfig); err != nil {
+		err = fmt.Errorf(parseConfigFileErrMsgFormat, err)
 		return
 	}
 

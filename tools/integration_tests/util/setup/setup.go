@@ -18,12 +18,15 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"math/rand"
 	"os"
 	"os/exec"
 	"path"
+	"runtime/debug"
 	"strings"
 	"syscall"
 	"testing"
+	"time"
 
 	"github.com/googlecloudplatform/gcsfuse/tools/integration_tests/util/operations"
 	"github.com/googlecloudplatform/gcsfuse/tools/util"
@@ -34,15 +37,23 @@ var mountedDirectory = flag.String("mountedDirectory", "", "The GCSFuse mounted 
 var integrationTest = flag.Bool("integrationTest", false, "Run tests only when the flag value is true.")
 var testInstalledPackage = flag.Bool("testInstalledPackage", false, "[Optional] Run tests on the package pre-installed on the host machine. By default, integration tests build a new package to run the tests.")
 
-const BufferSize = 100
-const FilePermission_0600 = 0600
+var seededRand *rand.Rand = rand.New(rand.NewSource(time.Now().UnixNano()))
+
+const (
+	BufferSize          = 100
+	FilePermission_0600 = 0600
+	DirPermission_0755  = 0755
+	Charset             = "abcdefghijklmnopqrstuvwxyz0123456789"
+)
 
 var (
-	binFile  string
-	logFile  string
-	testDir  string
-	mntDir   string
-	sbinFile string
+	binFile              string
+	logFile              string
+	testDir              string
+	mntDir               string
+	sbinFile             string
+	onlyDirMounted       string
+	dynamicBucketMounted string
 )
 
 // Run the shell script to prepare the testData in the specified bucket.
@@ -101,6 +112,26 @@ func SetMntDir(mntDirValue string) {
 
 func MntDir() string {
 	return mntDir
+}
+
+// OnlyDirMounted returns the name of the directory mounted in case of only dir mount.
+func OnlyDirMounted() string {
+	return onlyDirMounted
+}
+
+// SetOnlyDirMounted sets the name of the directory mounted in case of only dir mount.
+func SetOnlyDirMounted(onlyDirValue string) {
+	onlyDirMounted = onlyDirValue
+}
+
+// DynamicBucketMounted returns the name of the bucket in case of dynamic mount.
+func DynamicBucketMounted() string {
+	return dynamicBucketMounted
+}
+
+// SetDynamicBucketMounted sets the name of the bucket in case of dynamic mount.
+func SetDynamicBucketMounted(dynamicBucketValue string) {
+	dynamicBucketMounted = dynamicBucketValue
 }
 
 func CompareFileContents(t *testing.T, fileName string, fileContent string) {
@@ -201,6 +232,14 @@ func ExecuteTest(m *testing.M) (successCode int) {
 	return successCode
 }
 
+func GenerateRandomString(length int) string {
+	b := make([]byte, length)
+	for i := range b {
+		b[i] = Charset[seededRand.Intn(len(Charset))]
+	}
+	return string(b)
+}
+
 func UnMountAndThrowErrorInFailure(flags []string, successCode int) {
 	err := UnMount()
 	if err != nil {
@@ -211,6 +250,15 @@ func UnMountAndThrowErrorInFailure(flags []string, successCode int) {
 	if successCode != 0 {
 		f := strings.Join(flags, " ")
 		log.Print("Test Fails on " + f)
+
+		// Logfile name will be failed-integration-test-log-xxxxx
+		failedlogsFileName := "failed-integration-test-logs-" + GenerateRandomString(5)
+		log.Printf("log file is available on kokoro artifacts with file name: %s", failedlogsFileName)
+		logFileInKokoroArtifact := path.Join(os.Getenv("KOKORO_ARTIFACTS_DIR"), failedlogsFileName)
+		err := operations.CopyFile(logFile, logFileInKokoroArtifact)
+		if err != nil {
+			log.Fatalf("Error in coping logfile in kokoro artifact: %v", err)
+		}
 		return
 	}
 }
@@ -251,28 +299,89 @@ func RunTestsForMountedDirectoryFlag(m *testing.M) {
 }
 
 func SetUpTestDirForTestBucketFlag() {
+	if TestBucket() == "" {
+		log.Fatal("Not running TestBucket tests as --testBucket flag is not set.")
+	}
 	if err := SetUpTestDir(); err != nil {
 		log.Printf("setUpTestDir: %v\n", err)
 		os.Exit(1)
 	}
 }
 
+func SetUpLogDirForTestDirTests(logDirName string) (logDir string) {
+	logDir = path.Join(TestDir(), logDirName)
+	err := os.Mkdir(logDir, DirPermission_0755)
+	if err != nil {
+		log.Printf("os.Mkdir %s: %v\n", logDir, err)
+		os.Exit(1)
+	}
+	return
+}
+
+func ValidateLogDirForMountedDirTests(logDirName string) (logDir string) {
+	if *mountedDirectory == "" {
+		return ""
+	}
+	logDir = path.Join(os.TempDir(), logDirName)
+	_, err := os.Stat(logDir)
+	if err != nil {
+		log.Printf("validateLogDirForMountedDirTests %s: %v\n", logDir, err)
+		os.Exit(1)
+	}
+	return
+}
+
 func LogAndExit(s string) {
 	log.Print(s)
+	log.Print(string(debug.Stack()))
 	os.Exit(1)
 }
 
-// Clean the mounted directory
-func CleanMntDir() {
-	dir, err := os.ReadDir(mntDir)
+// CleanUpDir cleans up the content in given directory.
+func CleanUpDir(directoryPath string) {
+	dir, err := os.ReadDir(directoryPath)
 	if err != nil {
 		log.Printf("Error in reading directory: %v", err)
 	}
 
 	for _, d := range dir {
-		err := os.RemoveAll(path.Join([]string{mntDir, d.Name()}...))
+		err := os.RemoveAll(path.Join([]string{directoryPath, d.Name()}...))
 		if err != nil {
 			log.Printf("Error in removing directory: %v", err)
 		}
 	}
+}
+
+// CleanMntDir cleans the mounted directory.
+func CleanMntDir() {
+	CleanUpDir(mntDir)
+}
+
+// SetupTestDirectory creates a testDirectory in the mounted directory and cleans up
+// any content present in it.
+func SetupTestDirectory(testDirName string) string {
+	testDirPath := path.Join(MntDir(), testDirName)
+	err := os.Mkdir(testDirPath, DirPermission_0755)
+	if err != nil && !strings.Contains(err.Error(), "file exists") {
+		log.Printf("Error while setting up directory %s for testing: %v", testDirPath, err)
+	}
+	CleanUpDir(testDirPath)
+	return testDirPath
+}
+
+// CleanupDirectoryOnGCS cleans up the object/directory path passed in parameter.
+func CleanupDirectoryOnGCS(directoryPathOnGCS string) {
+	_, err := operations.ExecuteGsutilCommandf("rm -rf gs://%s", directoryPathOnGCS)
+	if err != nil {
+		log.Printf("Error while cleaning up directory %s from GCS: %v",
+			directoryPathOnGCS, err)
+	}
+}
+
+func AreBothMountedDirectoryAndTestBucketFlagsSet() bool {
+	if MountedDirectory() != "" && TestBucket() != "" {
+		return true
+	}
+	log.Print("Not running mounted directory tests as both --mountedDirectory and --testBucket flags are not set.")
+	return false
 }

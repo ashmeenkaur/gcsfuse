@@ -27,10 +27,15 @@ run_e2e_tests_on_package=$1
 
 # e.g. architecture=arm64 or amd64
 architecture=$(dpkg --print-architecture)
-echo "Installing go-lang 1.21.0..."
-wget -O go_tar.tar.gz https://go.dev/dl/go1.21.0.linux-${architecture}.tar.gz -q
+echo "Installing go-lang 1.21.4..."
+wget -O go_tar.tar.gz https://go.dev/dl/go1.21.4.linux-${architecture}.tar.gz -q
 sudo rm -rf /usr/local/go && tar -xzf go_tar.tar.gz && sudo mv go /usr/local
 export PATH=$PATH:/usr/local/go/bin
+# install python3-setuptools tools.
+sudo apt-get install -y gcc python3-dev python3-setuptools
+# Downloading composite object requires integrity checking with CRC32c in gsutil.
+# it requires to install crcmod.
+sudo apt install -y python3-crcmod
 
 # Create bucket for integration tests.
 # The prefix for the random string
